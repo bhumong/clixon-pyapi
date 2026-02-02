@@ -81,14 +81,9 @@ class Handler(handler.ContentHandler):
 
         """
 
-        if cdata.startswith("\n"):
-            cdata = cdata[1:]
-
-        if cdata.endswith("\n"):
-            cdata = cdata[:-1]
-
-        if cdata.isspace() and self.last_cdata == "":
-            return
+        if cdata.isspace():
+            if self.elements and self.elements[-1].cdata == "":
+                return
 
         # Escape special characters
         cdata = cdata.replace("&", "&amp;").replace(">", "&gt;").replace("<", "&lt;")

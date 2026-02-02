@@ -222,3 +222,21 @@ def test_delete_create():
     root.foo.bar.delete()
 
     assert root.dumps() == """<foo/>"""
+
+
+def test_preserve_newline_in_split_characters_chunks():
+    """
+    Expat/SAX may split element character data into multiple chunks.
+    Ensure we do not strip a leading newline from a non-whitespace chunk.
+    """
+
+    from clixon.parser import Handler
+
+    h = Handler()
+    h.startElement("rpl-prefix-set", {})
+    h.characters("prefix-set prefixset 192.168.1.0/24 le 24")
+    h.characters("\nend-set")
+    h.endElement("rpl-prefix-set")
+
+    elem = h.root.get_elements()[0]
+    assert elem.cdata == "prefix-set prefixset 192.168.1.0/24 le 24\nend-set"
