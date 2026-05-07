@@ -10,6 +10,7 @@ from clixon.helpers import get_path, timeout
 from clixon.netconf import (
     rpc_apply_template,
     rpc_apply_service,
+    rpc_close_session,
     rpc_commit,
     rpc_config_get,
     rpc_config_set,
@@ -23,6 +24,7 @@ from clixon.netconf import (
     rpc_unlock,
     rpc_transactions_get,
     rpc_devices_get,
+    rpc_device_rpc_result,
     rpc_discard_changes,
 )
 from clixon.parser import parse_string
@@ -49,6 +51,7 @@ class Clixon:
         user: Optional[str] = None,
         standalone: Optional[bool] = False,
         timeout: Optional[int] = 30,
+        from_server: Optional[bool] = False,
     ) -> None:
         """
         Create a Clixon object.
@@ -90,8 +93,10 @@ class Clixon:
 
         if not socket:
             self.__socket = create_socket(sockpath)
+            self.__server_socket = False
         else:
             self.__socket = socket
+            self.__server_socket = True
 
         self.__source = source
         self.__target = target
@@ -108,6 +113,8 @@ class Clixon:
             self.__source = "running"
             self.__standalone = True
             self.__target = "candidate"
+
+        self.__from_server = from_server
 
     def __enter__(self) -> object:
         """
@@ -134,26 +141,33 @@ class Clixon:
 
         """
         if self.__read_only:
-            logger.info("Read only mode enabled")
-            return
+            logger.info("Read only mode enabled, skipping config set")
+        else:
+            try:
+                if self.__root is None:
+                    self.__root = self.get_root()
 
-        try:
-            if self.__root is None:
-                self.__root = self.get_root()
+                for child in self.__root:
+                    config = rpc_config_set(
+                        child, user=self.__user, target=self.__target
+                    )
+                    send(self.__socket, config, pp)
+                    data = read(self.__socket, pp)
 
-            for child in self.__root:
-                config = rpc_config_set(child, user=self.__user, target=self.__target)
-                send(self.__socket, config, pp)
-                data = read(self.__socket, pp)
+                    self.__handle_errors(data)
 
-                self.__handle_errors(data)
+                if self.__commit:
+                    self.commit()
 
-            if self.__commit:
-                self.commit()
+            except Exception as e:
+                logger.error(f"Got exception from Clixon.__exit__: {e}")
+                raise Exception(f"{e}")
 
-        except Exception as e:
-            logger.error(f"Got exception from Clixon.__exit__: {e}")
-            raise Exception(f"{e}")
+        if not self.__from_server:
+            try:
+                self.close_session()
+            except Exception:
+                pass
 
     def commit(self) -> None:
         """
@@ -177,6 +191,25 @@ class Clixon:
 
         if self.__push:
             self.push()
+
+    def close_session(self) -> None:
+        """
+        Send a close-session RPC to gracefully terminate the NETCONF session.
+
+        :return: None
+        :rtype: None
+
+        """
+
+        close = rpc_close_session(user=self.__user)
+        send(self.__socket, close, pp)
+
+        # After sending close-session, the server should close the connection.
+        # We attempt to read to confirm this, expecting an error or no data.
+        data = read(self.__socket, pp)
+
+        if "<ok/>" not in data:
+            raise ValueError("Unexpected response after close-session")
 
     def get_root(
         self,
@@ -239,6 +272,8 @@ class Clixon:
             idx = 0
             while True:
                 logger.debug(f"Waiting for notification {idx} of 5")
+
+                self.__handle_errors(data)
 
                 if "notification" in data and "SUCCESS" in data:
                     self.__handle_errors(data)
@@ -441,9 +476,11 @@ class Clixon:
                 raise ValueError("Device RPC failed")
 
             tid = transaction.notification.controller_transaction.tid.get_data()
-            data = self.show_transactions(tid=tid)
+            rpc = rpc_device_rpc_result(tid=tid, user=self.__user)
+            send(self.__socket, rpc, pp)
+            data = read(self.__socket, pp)
 
-            return parse_string(data).rpc_reply.data.transactions.transaction.devices
+            return parse_string(data).rpc_reply.devices
 
         except AttributeError:
             raise ValueError("Device RPC failed")
@@ -471,6 +508,10 @@ class Clixon:
         :return: None
         :rtype: None
         """
+
+        if self.__read_only:
+            logger.info("Read only mode enabled")
+            return
 
         if inline:
             rpc = rpc_apply_template(
@@ -557,7 +598,9 @@ class Clixon:
 
         return data
 
-    def show_devices_diff(self, device: Optional[str] = "*", dict_format: Optional[bool] = False) -> str:
+    def show_devices_diff(
+        self, device: Optional[str] = "*", dict_format: Optional[bool] = False
+    ) -> str:
         """
         Show the devices diff.
 
@@ -568,7 +611,9 @@ class Clixon:
 
         self.pull(device=device, transient=True)
 
-        rpc_show_devices_diff = rpc_datastore_diff(device=device, transient=True, user=self.__user)
+        rpc_show_devices_diff = rpc_datastore_diff(
+            device=device, transient=True, user=self.__user
+        )
 
         send(self.__socket, rpc_show_devices_diff, pp)
         data = read(self.__socket, pp, standalone=self.__standalone)

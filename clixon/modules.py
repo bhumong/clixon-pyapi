@@ -30,6 +30,9 @@ def run_hooks(
     run_hooks = False
 
     for module in modules:
+        if getattr(module, "SERVICE") != service_name:
+            continue
+
         if (
             hasattr(module, "setup_pre_commit")
             or hasattr(module, "setup_post_commit")
@@ -41,7 +44,7 @@ def run_hooks(
         logger.info("No hooks found.")
         return
 
-    with Clixon(socket=socket, user=user) as cd:
+    with Clixon(socket=socket, user=user, from_server=True) as cd:
         for module in modules:
             if service_name:
                 if module.SERVICE != service_name:
@@ -63,7 +66,7 @@ def run_hooks(
                     get_root_xpath = module.SERVICE_XPATH
                     get_root_namespaces = module.SERVICE_NAMESPACES
 
-                if get_root_xpath and get_root_namespaces:
+                if get_root_xpath:
                     root = cd.get_root(
                         xpath=get_root_xpath, namespaces=get_root_namespaces
                     )
@@ -136,7 +139,7 @@ def run_modules(
         logger.info("No modules found.")
         return
 
-    with Clixon(socket=socket, user=user) as cd:
+    with Clixon(socket=socket, user=user, from_server=True) as cd:
         for module in modules:
             if service_name:
                 if module.SERVICE != service_name:
@@ -146,7 +149,24 @@ def run_modules(
             try:
                 logger.info(f"Running module {module}")
                 logger.debug(f"Module {module} is getting config")
-                root = cd.get_root()
+
+                # Get the SERVICE_PATH
+                get_root_xpath = None
+                get_root_namespaces = None
+
+                if hasattr(module, "SERVICE_XPATH") and hasattr(
+                    module, "SERVICE_NAMESPACES"
+                ):
+                    get_root_xpath = module.SERVICE_XPATH
+                    get_root_namespaces = module.SERVICE_NAMESPACES
+
+                if get_root_xpath:
+                    root = cd.get_root(
+                        xpath=get_root_xpath, namespaces=get_root_namespaces
+                    )
+                else:
+                    root = cd.get_root()
+
                 module.setup(root, logger, instance=instance, diff=service_diff)
             except Exception as e:
                 logger.error(f"Module {module} failed with exception: {e}")

@@ -25,7 +25,7 @@ class RPCTypes(Enum):
 
 
 CONTROLLER_NS = {"xmlns": "http://clicon.org/controller"}
-CONTROLLER_NS_PREFIX = "clixon-controller"
+CONTROLLER_NS_PREFIX = "ctrl"
 CONTROLLER_NS_URI = "http://clicon.org/controller"
 # Top-level elements in clixon-controller namespace
 CONTROLLER_ELEMENTS = ["services", "devices"]
@@ -129,10 +129,6 @@ def rpc_config_set(
     root.rpc.edit_config.default_operation.cdata = "merge"
     root.rpc.edit_config.create("config")
 
-    if root.rpc.edit_config.config.get_elements("devices") == []:
-        root.rpc.edit_config.config.create("devices", attributes=CONTROLLER_NS)
-        logger.debug("Created configuration node devices.")
-
     for node in config.get_elements():
         if node.get_name() == "devices":
             continue
@@ -140,14 +136,21 @@ def rpc_config_set(
         root.rpc.edit_config.config.add(node)
         logger.debug(f"Added node {node.get_name()} to configuration.")
 
-    for device in config.devices.device:
-        if device.find_modified():
-            logger.debug(
-                f"Modifications found on device {device.name.get_data()}, added to configuration."
-            )
-            root.rpc.edit_config.config.devices.add(device)
-        else:
-            logger.debug(f"No modifications found on device {device.name.get_data()}")
+    if config.get_elements("devices"):
+        if root.rpc.edit_config.config.get_elements("devices") == []:
+            root.rpc.edit_config.config.create("devices", attributes=CONTROLLER_NS)
+            logger.debug("Created configuration node devices.")
+
+        for device in config.devices.device:
+            if device.find_modified():
+                logger.debug(
+                    f"Modifications found on device {device.name.get_data()}, added to configuration."
+                )
+                root.rpc.edit_config.config.devices.add(device)
+            else:
+                logger.debug(
+                    f"No modifications found on device {device.name.get_data()}"
+                )
 
     return root
 
@@ -366,7 +369,7 @@ def rpc_error_get(xmlstr: str, standalone: Optional[bool] = False) -> None:
             if standalone:
                 logger.error(f"Error in notification: {message}")
 
-            logger.error(message)
+            raise RPCError(message)
         except AttributeError:
             if "SUCCESS" in xmlstr:
                 pass
@@ -616,6 +619,39 @@ def rpc_discard_changes(user: Optional[str] = None) -> Element:
     return root
 
 
+def rpc_close_session(user: Optional[str] = None) -> Element:
+    """
+    Create a RPC close-session element.
+
+    :param user: User name
+    :type user: str
+    :return: RPC element
+    :rtype: Element
+
+    """
+    #  Example:
+    #  <rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"
+    #  cl:username="snc" xmlns:cl="http://clicon.org/lib" message-id="42"><close-session/></rpc>
+
+    attributes = {
+        "xmlns": "urn:ietf:params:xml:ns:netconf:base:1.0",
+        "cl:username": None,
+        "xmlns:cl": "http://clicon.org/lib",
+        "message-id": "42",
+    }
+
+    if not user:
+        attributes["cl:username"] = getpass.getuser()
+    else:
+        attributes["cl:username"] = user
+
+    root = Element()
+    root.create("rpc", attributes=attributes)
+    root.rpc.create("close-session")
+
+    return root
+
+
 def rpc_connection_open(
     device: Optional[str] = "*", user: Optional[str] = None
 ) -> Element:
@@ -688,6 +724,24 @@ def rpc_transactions_get(
         attributes={"xmlns": "urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults"},
         data="report-all",
     )
+
+    return root
+
+
+def rpc_device_rpc_result(tid: int, user: Optional[str] = None) -> Element:
+    """
+    Collect result from a device-rpc and remove data from backend when collected.
+    """
+
+    if not user:
+        BASE_ATTRIBUTES["username"] = getpass.getuser()
+    else:
+        BASE_ATTRIBUTES["username"] = user
+
+    root = Element()
+    root.create("rpc", attributes=BASE_ATTRIBUTES)
+    root.rpc.create("device-rpc-result", attributes=CONTROLLER_NS)
+    root.rpc.device_rpc_result.create("tid", data=str(tid))
 
     return root
 
